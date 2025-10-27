@@ -63,7 +63,7 @@ def sms_webhook():
 
         # Prepare response
         response_body = {"status": "success", "parsed": parsed_data}
-
+        print("Response:", response_body)
         # Record the request and response in the recent entries store
         entry = {
             "received_at": parsed_data.get("received_at"),
@@ -104,4 +104,4 @@ def recent():
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    app.run(host="0.0.0.0", port=5000,debug=False)
