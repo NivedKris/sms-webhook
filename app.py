@@ -46,6 +46,10 @@ if MONGODB_URI:
 @app.route("/sms-webhook", methods=["POST"])
 def sms_webhook():
     try:
+        # Read the raw body first and cache it. Some Flask helpers (form/json parsers)
+        # may consume the input stream; reading it early ensures we can persist the
+        # exact raw payload to MongoDB.
+        raw_body = request.get_data(as_text=True)
         data = request.form.to_dict() or request.get_json(silent=True) or {}
         message = data.get("key") or data.get("msg") or ""
         raw_time = data.get("time") or datetime.now().isoformat()
@@ -54,7 +58,6 @@ def sms_webhook():
         if not message.lower().startswith("upi credit"):
             logging.info("Ignored non-credit message: %s", message)
             # Save the raw request (unstructured) into MongoDB 'wc2026.logs' if configured
-            raw_body = request.get_data(as_text=True)
             if mongo_db is not None:
                 try:
                     mongo_db["logs"].insert_one({"raw_request": raw_body, "saved_at": datetime.now(timezone.utc)})
@@ -112,7 +115,8 @@ def sms_webhook():
         if mongo_db is not None:
             try:
                 doc = {
-                    "raw_request": request.get_data(as_text=True),
+                    # Use the cached raw body so we store exactly what arrived
+                    "raw_request": raw_body,
                     "method": request.method,
                     "path": request.path,
                     "query_string": request.query_string.decode() if request.query_string else "",
