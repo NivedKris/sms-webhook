@@ -2,7 +2,9 @@ import os
 import re
 import logging
 from datetime import datetime
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, render_template
+from collections import deque
+from threading import Lock
 
 # --- Logging setup ---
 if not os.path.exists("logs"):
@@ -15,6 +17,10 @@ logging.basicConfig(
 )
 
 app = Flask(__name__)
+
+# Thread-safe in-memory store for last 5 request/response pairs
+RECENT_LOCK = Lock()
+RECENT_ENTRIES = deque(maxlen=5)
 
 @app.route("/sms-webhook", methods=["POST"])
 def sms_webhook():
@@ -55,8 +61,25 @@ def sms_webhook():
 
         logging.info("✅ Parsed payment: %s", parsed_data)
 
+        # Prepare response
+        response_body = {"status": "success", "parsed": parsed_data}
+
+        # Record the request and response in the recent entries store
+        entry = {
+            "received_at": parsed_data.get("received_at"),
+            "request": {
+                "headers": dict(request.headers),
+                "form": request.form.to_dict(),
+                "json": request.get_json(silent=True),
+            },
+            "parsed": parsed_data,
+            "response": response_body,
+        }
+        with RECENT_LOCK:
+            RECENT_ENTRIES.appendleft(entry)
+
         # Respond to sender
-        return jsonify({"status": "success", "parsed": parsed_data}), 200
+        return jsonify(response_body), 200
 
     except Exception as e:
         logging.error("Error processing SMS: %s", str(e), exc_info=True)
@@ -70,6 +93,14 @@ def index():
         "status": "ok",
         "timestamp": datetime.now().isoformat(),
     })
+
+
+@app.route("/recent", methods=["GET"])
+def recent():
+    """Render a simple page showing the last 5 requests and responses."""
+    with RECENT_LOCK:
+        entries = list(RECENT_ENTRIES)
+    return render_template("recent.html", entries=entries)
 
 
 if __name__ == "__main__":

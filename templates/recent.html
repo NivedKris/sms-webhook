@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Recent Requests & Responses</title>
+    <style>
+      body { font-family: Arial, sans-serif; margin: 20px; }
+      .entry { border: 1px solid #ddd; padding: 12px; margin-bottom: 12px; border-radius: 6px; }
+      pre { background: #f6f6f6; padding: 8px; overflow: auto; }
+      h2 { margin-top: 0; }
+      .meta { color: #666; font-size: 0.9em; }
+    </style>
+  </head>
+  <body>
+    <h1>Last 5 Requests & Responses</h1>
+    {% if not entries %}
+      <p>No recent entries yet.</p>
+    {% else %}
+      {% for e in entries %}
+        <div class="entry">
+          <h2>Received at: {{ e.received_at }}</h2>
+          <div class="meta">Parsed summary:</div>
+          <pre>{{ e.parsed | tojson(indent=2) }}</pre>
+
+          <div class="meta">Request headers:</div>
+          <pre>{{ e.request.headers | tojson(indent=2) }}</pre>
+
+          <div class="meta">Form data:</div>
+          <pre>{{ e.request.form | tojson(indent=2) }}</pre>
+
+          <div class="meta">JSON body:</div>
+          <pre>{{ e.request.json | tojson(indent=2) }}</pre>
+
+          <div class="meta">Response:</div>
+          <pre>{{ e.response | tojson(indent=2) }}</pre>
+        </div>
+      {% endfor %}
+    {% endif %}
+  </body>
+</html>
