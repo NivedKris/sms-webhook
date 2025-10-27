@@ -53,7 +53,15 @@ def sms_webhook():
         # --- Only handle UPI Credit messages ---
         if not message.lower().startswith("upi credit"):
             logging.info("Ignored non-credit message: %s", message)
-            return jsonify({"status": "ignored", "reason": "not a credit message"}), 200
+            # Save the raw request (unstructured) into MongoDB 'wc2026.logs' if configured
+            raw_body = request.get_data(as_text=True)
+            if mongo_db is not None:
+                try:
+                    mongo_db["logs"].insert_one({"raw_request": raw_body, "saved_at": datetime.now(timezone.utc)})
+                except Exception:
+                    logging.exception("Failed to save raw non-credit request to MongoDB 'logs' collection")
+            # Return an error status code with no JSON body as requested
+            return "", 400
 
         # Parse amount
         amount_match = re.search(r'Rs\.?(\d+(?:\.\d{1,2})?)', message)
