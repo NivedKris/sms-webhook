@@ -59,15 +59,7 @@ def sms_webhook():
         # --- Only handle UPI Credit messages ---
         if not message.lower().startswith("upi credit"):
             logging.info("Ignored non-credit message: %s", message)
-            if mongo_db is not None:
-                try:
-                    mongo_db["logs"].insert_one({
-                        "raw_request": raw_body,
-                        "saved_at": datetime.now(timezone.utc),
-                        "reason": "not a credit message"
-                    })
-                except Exception:
-                    logging.exception("Failed to log non-credit message")
+            # Raw logging removed per request. Just return 400.
             return "", 400
 
         # --- Extract fields ---
@@ -106,16 +98,15 @@ def sms_webhook():
         with RECENT_LOCK:
             RECENT_ENTRIES.appendleft(entry)
 
+        # Persist parsed transaction into `transactions` collection if DB configured
         if mongo_db is not None:
             try:
-                mongo_db["logs"].insert_one({
-                    "raw_request": raw_body,
-                    "form": data,
-                    "parsed": parsed_data,
-                    "saved_at": datetime.now(timezone.utc),
-                })
+                txn_doc = parsed_data.copy()
+                txn_doc["raw_request"] = raw_body
+                txn_doc["saved_at"] = datetime.now(timezone.utc)
+                mongo_db["transactions"].insert_one(txn_doc)
             except Exception:
-                logging.exception("Failed to insert into MongoDB")
+                logging.exception("Failed to insert parsed transaction into MongoDB 'transactions' collection")
 
         return jsonify(response_body), 200
 
@@ -140,35 +131,6 @@ def recent():
         entries = list(RECENT_ENTRIES)
     return render_template("recent.html", entries=entries)
 
-
-@app.route("/save-logs", methods=["POST"])
-def save_logs():
-    """Accept any POST and save the raw request and metadata into wc2026.logs.
-
-    Returns 201 with inserted_id on success, 500 on failure, or 400 if DB not configured.
-    """
-    if mongo_db is None:
-        logging.error("/save-logs called but mongo_db is not configured")
-        return jsonify({"status": "error", "message": "database not configured"}), 400
-
-    try:
-        doc = {
-            "raw_request": request.get_data(as_text=True),
-            "method": request.method,
-            "path": request.path,
-            "query_string": request.query_string.decode() if request.query_string else "",
-            "remote_addr": request.remote_addr,
-            "headers": dict(request.headers),
-            "form": request.form.to_dict(),
-            "json": request.get_json(silent=True),
-            "received_at": datetime.now(timezone.utc),
-        }
-        res = mongo_db["logs"].insert_one(doc)
-        logging.info("Saved log with id %s", res.inserted_id)
-        return jsonify({"status": "created", "inserted_id": str(res.inserted_id)}), 201
-    except Exception as ex:
-        logging.exception("Failed to save log in /save-logs")
-        return jsonify({"status": "error", "message": str(ex)}), 500
 
 
 if __name__ == "__main__":
