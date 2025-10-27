@@ -46,39 +46,40 @@ if MONGODB_URI:
 @app.route("/sms-webhook", methods=["POST"])
 def sms_webhook():
     try:
-        # Read the raw body first and cache it. Some Flask helpers (form/json parsers)
-        # may consume the input stream; reading it early ensures we can persist the
-        # exact raw payload to MongoDB.
         raw_body = request.get_data(as_text=True)
-        data = request.form.to_dict() or request.get_json(silent=True) or {}
-        message = data.get("key") or data.get("msg") or ""
+        data = request.form.to_dict() or {}
+        message = data.get("key", "").strip()
         raw_time = data.get("time") or datetime.now().isoformat()
+
+        # Strip out the "From :" line if present
+        if "UPI Credit" in message:
+            message = message.split("UPI Credit", 1)[1].strip()
+            message = "UPI Credit" + message  # restore prefix cleanly
 
         # --- Only handle UPI Credit messages ---
         if not message.lower().startswith("upi credit"):
             logging.info("Ignored non-credit message: %s", message)
-            # Save the raw request (unstructured) into MongoDB 'wc2026.logs' if configured
             if mongo_db is not None:
                 try:
-                    mongo_db["logs"].insert_one({"raw_request": raw_body, "saved_at": datetime.now(timezone.utc)})
+                    mongo_db["logs"].insert_one({
+                        "raw_request": raw_body,
+                        "saved_at": datetime.now(timezone.utc),
+                        "reason": "not a credit message"
+                    })
                 except Exception:
-                    logging.exception("Failed to save raw non-credit request to MongoDB 'logs' collection")
-            # Return an error status code with no JSON body as requested
+                    logging.exception("Failed to log non-credit message")
             return "", 400
 
-        # Parse amount
+        # --- Extract fields ---
         amount_match = re.search(r'Rs\.?(\d+(?:\.\d{1,2})?)', message)
         amount = float(amount_match.group(1)) if amount_match else None
 
-        # Parse transaction ID
         txn_match = re.search(r'Info:UPI/[A-Z]+/(\d+)/', message)
         txn_id = txn_match.group(1) if txn_match else None
 
-        # Parse name
         name_match = re.search(r'/(\w[\w\s]*)\s+on\s+\d', message)
         name = name_match.group(1).strip() if name_match else None
 
-        # Parse timestamp
         time_match = re.search(r'on\s+(\d{2}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})', message)
         sms_time = time_match.group(1) if time_match else None
 
@@ -93,48 +94,29 @@ def sms_webhook():
 
         logging.info("✅ Parsed payment: %s", parsed_data)
 
-        # Prepare response
         response_body = {"status": "success", "parsed": parsed_data}
-        print("Response:", response_body)
-        # Record the request and response in the recent entries store
+
+        # Log to memory & MongoDB
         entry = {
             "received_at": parsed_data.get("received_at"),
-            "request": {
-                "headers": dict(request.headers),
-                "form": request.form.to_dict(),
-                "json": request.get_json(silent=True),
-            },
+            "request": {"form": data},
             "parsed": parsed_data,
             "response": response_body,
         }
         with RECENT_LOCK:
             RECENT_ENTRIES.appendleft(entry)
 
-        # Also persist to MongoDB collection `logs` if configured.
-        # This will create the collection automatically on first insert.
         if mongo_db is not None:
             try:
-                doc = {
-                    # Use the cached raw body so we store exactly what arrived
+                mongo_db["logs"].insert_one({
                     "raw_request": raw_body,
-                    "method": request.method,
-                    "path": request.path,
-                    "query_string": request.query_string.decode() if request.query_string else "",
-                    "remote_addr": request.remote_addr,
-                    "headers": dict(request.headers),
-                    "form": request.form.to_dict(),
-                    "json": request.get_json(silent=True),
+                    "form": data,
                     "parsed": parsed_data,
-                    "response": response_body,
-                    "received_at": parsed_data.get("received_at"),
-                    # Use timezone-aware UTC datetime to avoid deprecation warnings
                     "saved_at": datetime.now(timezone.utc),
-                }
-                mongo_db["logs"].insert_one(doc)
+                })
             except Exception:
-                logging.exception("Failed to insert webhook document into MongoDB 'logs' collection")
+                logging.exception("Failed to insert into MongoDB")
 
-        # Respond to sender
         return jsonify(response_body), 200
 
     except Exception as e:
